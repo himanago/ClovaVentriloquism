@@ -105,10 +105,57 @@ namespace ClovaVentriloquism
                             await client.RaiseEventAsync("tmpl_" + ev.Source.UserId, Consts.DurableEventNameAddToTemplate, $"{Consts.FinishMakingTemplate}_{postbackEvent.ReplyToken}");
                             break;
 
+                        // 翻訳モード選択
+                        case "action=startTranslation":
+                            // クイックリプライでモード選択
+                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                                new List<ISendMessage>
+                                {
+                                    new TextMessage("何語に翻訳しますか？",
+                                        new QuickReply
+                                        {
+                                            Items =
+                                            {
+                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 英語へ", "lang=en")),
+                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 韓国語へ", "lang=ko")),
+                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 日本語へ", "lang=ja")),
+                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 翻訳モード終了", "action=endTranslation"))
+                                            }
+                                        })
+                                });
+                            break;
+
+                        // 翻訳モード開始
+                        case string s when s.StartsWith("lang="):
+                            var lang = s.Replace("lang=", string.Empty);
+                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                                new List<ISendMessage>
+                                {
+                                    new TextMessage(
+                                        @$"{lang switch
+                                        {
+                                            "en" => "英語",
+                                            "ko" => "韓国語",
+                                            "ja" => "日本語",
+                                            _ => throw new InvalidOperationException()
+                                        }}に翻訳してしゃべります。")
+                                });
+
+                            await client.StartNewAsync(nameof(StartTranslationMode), "translation_" + ev.Source.UserId, lang);
+                            break;
+
+                        // 翻訳モード終了
+                        case "action=endTranslation":
+                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                                new List<ISendMessage>{ new TextMessage("翻訳を終了します。") });
+                            await client.RaiseEventAsync("translation_" + ev.Source.UserId, Consts.DurableEventNameEndTranslationMode);
+                            break;
+
                         // 無限セッション終了
                         case "action=terminateDurableSession":
                             // Durable Functionsの外部イベントとして送信メッセージを投げる
                             await client.TerminateAsync(ev.Source.UserId, "User Canceled");
+                            await client.TerminateAsync("translation_" + ev.Source.UserId, "User Canceled");
                             break;
                     }
                 }
@@ -176,6 +223,15 @@ namespace ClovaVentriloquism
                                 Contents = input.Item2.Select(t => new ButtonComponent { Action = new MessageTemplateAction(t, t) }).ToList<IFlexComponent>()
                             }))
                 });
+        }
+
+        [FunctionName(nameof(StartTranslationMode))]
+        public static async Task StartTranslationMode(
+            [OrchestrationTrigger] DurableOrchestrationContext context)
+        {
+            context.SetCustomStatus(context.GetInput<string>());
+            // 終了まで待機
+            await context.WaitForExternalEvent(Consts.DurableEventNameEndTranslationMode);
         }
     }
 }
