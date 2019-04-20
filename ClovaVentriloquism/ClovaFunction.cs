@@ -11,11 +11,16 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using System;
 using DurableTask.Core;
+using Newtonsoft.Json;
+using System.Text;
+using ClovaVentriloquism.Schema;
 
 namespace ClovaVentriloquism
 {
     public static class ClovaFunction
     {
+        private static readonly HttpClient httpClient = new HttpClient();
+
         /// <summary>
         /// CEKのエンドポイント。
         /// </summary>
@@ -75,8 +80,48 @@ namespace ClovaVentriloquism
                                     // 完了していた場合（＝LINEからの外部イベント処理が実行された場合）
                                     // 再度セッション継続
                                     KeepClovaWaiting(cekResponse);
-                                    // 入力内容を話させる
-                                    cekResponse.AddText(status.Output.ToObject<string>());
+
+                                    var translationStatus = await client.GetStatusAsync("translation_" + userId);
+                                    if (translationStatus?.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew || 
+                                        translationStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Running ||
+                                        translationStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Pending)
+                                    {
+                                        var lang = translationStatus.CustomStatus.ToString();
+
+                                        // ユーザー入力
+                                        var body = new object[] { new { Text = status.Output.ToObject<string>() } };
+                                        var requestBody = JsonConvert.SerializeObject(body);
+
+                                        // 翻訳
+                                        using (var request = new HttpRequestMessage())
+                                        {
+                                            request.Method = HttpMethod.Post;
+                                            request.RequestUri = new Uri(Consts.AzureCognitiveTranslatorEndpoint + lang);
+                                            request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+                                            request.Headers.Add("Ocp-Apim-Subscription-Key", Consts.AzureCognitiveTranslatorKey);
+                                            var response = await httpClient.SendAsync(request);
+
+                                            // 結果の取得とデシリアライズ
+                                            var jsonResponse = await response.Content.ReadAsStringAsync();
+                                            var result = JsonConvert.DeserializeObject<List<TranslatorResult>>(jsonResponse);
+
+                                            // 入力内容を話させる
+                                            cekResponse.AddText(result[0].Translations[0].Text,
+                                                lang switch
+                                                {
+                                                    "en" => Lang.En,
+                                                    "ko" => Lang.Ko,
+                                                    "ja" => Lang.Ja,
+                                                    _ => throw new InvalidOperationException()
+                                                });
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // 入力内容をそのまま話させる
+                                        cekResponse.AddText(status.Output.ToObject<string>());
+                                    }
+
                                     // オーケストレーターを再実行
                                     await client.StartNewAsync(nameof(WaitForLineInput), userId, null);
                                 }
