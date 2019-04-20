@@ -136,7 +136,7 @@ namespace ClovaVentriloquism
 
             if (value.StartsWith(Consts.FinishMakingTemplate))
             {
-                // 完成したリストをRwplyトークンとともに返信Activityに渡す
+                // 完成したリストをReplyトークンとともに返信Activityに渡す
                 var token = value.Replace(Consts.FinishMakingTemplate + "_", string.Empty);
                 await context.CallActivityAsync(nameof(SendTemplates), (token, list));
             }
