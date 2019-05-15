@@ -32,132 +32,11 @@ namespace ClovaVentriloquism
 
                 if (ev is MessageEvent messageEvent)
                 {
-                    if (messageEvent.Message is TextEventMessage message)
-                    {
-                        // テンプレート入力中であればテンプレートにメッセージを追加
-                        var tmplStatus = await client.GetStatusAsync("tmpl_" + messageEvent.Source.UserId);
-                        if (tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
-                            tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
-                            tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Running)
-                        {
-                            // Durable Functionsの外部イベントとして送信メッセージを投げる
-                            await client.RaiseEventAsync("tmpl_" + messageEvent.Source.UserId, Consts.DurableEventNameAddToTemplate, message.Text);
-
-                            await lineMessagingClient.ReplyMessageAsync(messageEvent.ReplyToken,
-                                new List<ISendMessage>
-                                {
-                                    new TextMessage("テンプレートに追加しました。",
-                                        new QuickReply
-                                        {
-                                            Items = { new QuickReplyButtonObject(new PostbackTemplateAction("作成を終了する", "action=endTemplateSetting")) }
-                                        })
-                                });
-                        }
-                        else
-                        {
-                            // 待機中になるまで待つ
-                            while (true)
-                            {
-                                // ひとつ前のイベントを処理している最中は無視されるので注意
-                                var ventStatus = await client.GetStatusAsync(messageEvent.Source.UserId);
-                                if (ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
-                                    ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
-                                    ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Running)
-                                {
-                                    // Durable Functionsの外部イベントとして送信メッセージを投げる
-                                    await client.RaiseEventAsync(messageEvent.Source.UserId, Consts.DurableEventNameLineVentriloquismInput, message.Text);
-                                    break;
-                                }
-                                else if (ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Terminated ||
-                                         ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Canceled ||
-                                         ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Failed)
-                                {
-                                    // キャンセル、失敗時はスキル起動していない状態のため、スキル起動を促す
-                                    await lineMessagingClient.ReplyMessageAsync(messageEvent.ReplyToken,
-                                        new List<ISendMessage>
-                                        {
-                                            new TextMessage("Clovaで「腹話術」のスキルを起動してください。")
-                                        });
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    await OnMessageEventAsync(client, messageEvent);
                 }
                 else if (ev is PostbackEvent postbackEvent)
                 {
-                    switch (postbackEvent?.Postback?.Data)
-                    {
-                        // テンプレート作成開始
-                        case "action=startTemplateSetting":
-                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
-                                new List<ISendMessage>
-                                {
-                                    new TextMessage("テンプレートに追加したいセリフを送ってください。")
-                                });
-
-                            await client.StartNewAsync(nameof(MakeTemplate), "tmpl_" + ev.Source.UserId, null);
-                            break;
-
-                        // テンプレート作成終了
-                        case "action=endTemplateSetting":
-                            // Durable Functionsの外部イベントとして送信メッセージを投げる
-                            await client.RaiseEventAsync("tmpl_" + ev.Source.UserId, Consts.DurableEventNameAddToTemplate, $"{Consts.FinishMakingTemplate}_{postbackEvent.ReplyToken}");
-                            break;
-
-                        // 翻訳モード選択
-                        case "action=startTranslation":
-                            // クイックリプライでモード選択
-                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
-                                new List<ISendMessage>
-                                {
-                                    new TextMessage("何語に翻訳しますか？",
-                                        new QuickReply
-                                        {
-                                            Items =
-                                            {
-                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 英語へ", "lang=en")),
-                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 韓国語へ", "lang=ko")),
-                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 日本語へ", "lang=ja")),
-                                                new QuickReplyButtonObject(new PostbackTemplateAction(" 翻訳モード終了", "action=endTranslation"))
-                                            }
-                                        })
-                                });
-                            break;
-
-                        // 翻訳モード開始
-                        case string s when s.StartsWith("lang="):
-                            var lang = s.Replace("lang=", string.Empty);
-                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
-                                new List<ISendMessage>
-                                {
-                                    new TextMessage(
-                                        @$"{lang switch
-                                        {
-                                            "en" => "英語",
-                                            "ko" => "韓国語",
-                                            "ja" => "日本語",
-                                            _ => throw new InvalidOperationException()
-                                        }}に翻訳してしゃべります。")
-                                });
-
-                            await client.StartNewAsync(nameof(StartTranslationMode), "translation_" + ev.Source.UserId, lang);
-                            break;
-
-                        // 翻訳モード終了
-                        case "action=endTranslation":
-                            await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
-                                new List<ISendMessage>{ new TextMessage("翻訳を終了します。") });
-                            await client.RaiseEventAsync("translation_" + ev.Source.UserId, Consts.DurableEventNameEndTranslationMode);
-                            break;
-
-                        // 無限セッション終了
-                        case "action=terminateDurableSession":
-                            // Durable Functionsの外部イベントとして送信メッセージを投げる
-                            await client.TerminateAsync(ev.Source.UserId, "User Canceled");
-                            await client.TerminateAsync("translation_" + ev.Source.UserId, "User Canceled");
-                            break;
-                    }
+                    await OnPostbackEventAsync(client, postbackEvent);
                 }
             }
             catch (Exception ex)
@@ -167,6 +46,142 @@ namespace ClovaVentriloquism
             }
 
             return new OkObjectResult("OK");
+        }
+        
+        private static async Task OnMessageEventAsync(DurableOrchestrationClient client, MessageEvent messageEvent)
+        {
+            if (messageEvent.Message is TextEventMessage message)
+            {
+                // テンプレート入力中であればテンプレートにメッセージを追加
+                var tmplStatus = await client.GetStatusAsync("tmpl_" + messageEvent.Source.UserId);
+                if (tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
+                    tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
+                    tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Running)
+                {
+                    var str = message.Text.Replace("\r\n", "\n").Replace("\n", "。");
+
+                    // Durable Functionsの外部イベントとして送信メッセージを投げる
+                    await client.RaiseEventAsync("tmpl_" + messageEvent.Source.UserId, Consts.DurableEventNameAddToTemplate, str);
+
+                    await lineMessagingClient.ReplyMessageAsync(messageEvent.ReplyToken,
+                        new List<ISendMessage>
+                        {
+                            new TextMessage("テンプレートに追加しました。",
+                                new QuickReply
+                                {
+                                    Items = { new QuickReplyButtonObject(new PostbackTemplateAction("作成を終了する", "action=endTemplateSetting")) }
+                                })
+                        });
+                }
+                else
+                {
+                    // 待機中になるまで待つ
+                    while (true)
+                    {
+                        // ひとつ前のイベントを処理している最中は無視されるので注意
+                        var ventStatus = await client.GetStatusAsync(messageEvent.Source.UserId);
+                        if (ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
+                            ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
+                            ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Running)
+                        {
+                            // Durable Functionsの外部イベントとして送信メッセージを投げる
+                            await client.RaiseEventAsync(messageEvent.Source.UserId, Consts.DurableEventNameLineVentriloquismInput, message.Text);
+                            break;
+                        }
+                        else if (ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Terminated ||
+                                 ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Canceled ||
+                                 ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Failed)
+                        {
+                            // キャンセル、失敗時はスキル起動していない状態のため、スキル起動を促す
+                            await lineMessagingClient.ReplyMessageAsync(messageEvent.ReplyToken,
+                                new List<ISendMessage>
+                                {
+                                    new TextMessage("Clovaで「腹話術」のスキルを起動してください。")
+                                });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        private static async Task OnPostbackEventAsync(DurableOrchestrationClient client, PostbackEvent postbackEvent)
+        {
+            switch (postbackEvent?.Postback?.Data)
+            {
+                // テンプレート作成開始
+                case "action=startTemplateSetting":
+                    await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                        new List<ISendMessage>
+                        {
+                            new TextMessage("テンプレートに追加したいセリフを送ってください。")
+                        });
+
+                    await client.StartNewAsync(nameof(MakeTemplate), "tmpl_" + postbackEvent.Source.UserId, null);
+                    break;
+
+                // テンプレート作成終了
+                case "action=endTemplateSetting":
+                    // Durable Functionsの外部イベントとして送信メッセージを投げる
+                    await client.RaiseEventAsync("tmpl_" + postbackEvent.Source.UserId, Consts.DurableEventNameAddToTemplate, $"{Consts.FinishMakingTemplate}_{postbackEvent.ReplyToken}");
+                    break;
+
+                // 翻訳モード選択
+                case "action=startTranslation":
+                    // クイックリプライでモード選択
+                    await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                        new List<ISendMessage>
+                        {
+                            new TextMessage("何語に翻訳しますか？",
+                                new QuickReply
+                                {
+                                    Items =
+                                    {
+                                        new QuickReplyButtonObject(new PostbackTemplateAction(" 英語へ", "lang=en")),
+                                        new QuickReplyButtonObject(new PostbackTemplateAction(" 韓国語へ", "lang=ko")),
+                                        new QuickReplyButtonObject(new PostbackTemplateAction(" 日本語へ", "lang=ja")),
+                                        new QuickReplyButtonObject(new PostbackTemplateAction(" 翻訳モード終了", "action=endTranslation"))
+                                    }
+                                })
+                        });
+                    break;
+
+                // 翻訳モード開始
+                case string s when s.StartsWith("lang="):
+                    var lang = s.Replace("lang=", string.Empty);
+                    await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                        new List<ISendMessage>
+                        {
+                            new TextMessage(
+                                @$"{lang switch
+                                {
+                                    "en" => "英語",
+                                    "ko" => "韓国語",
+                                    "ja" => "日本語",
+                                    _ => throw new InvalidOperationException()
+                                }}に翻訳してしゃべります。")
+                        });
+
+                    await client.StartNewAsync(nameof(StartTranslationMode), "translation_" + postbackEvent.Source.UserId, lang);
+                    break;
+
+                // 翻訳モード終了
+                case "action=endTranslation":
+                    await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                        new List<ISendMessage> { new TextMessage("翻訳を終了します。") });
+                    await client.RaiseEventAsync("translation_" + postbackEvent.Source.UserId, Consts.DurableEventNameEndTranslationMode);
+                    break;
+
+                // 無限セッション終了
+                case "action=terminateDurableSession":
+                    await lineMessagingClient.ReplyMessageAsync(postbackEvent.ReplyToken,
+                        new List<ISendMessage> { new TextMessage("スキルを終了します。") });
+
+                    // Durable Functionsの外部イベントとして送信メッセージを投げる
+                    await client.TerminateAsync(postbackEvent.Source.UserId, "User Canceled");
+                    await client.TerminateAsync("translation_" + postbackEvent.Source.UserId, "User Canceled");
+                    break;
+            }
         }
 
         /// <summary>

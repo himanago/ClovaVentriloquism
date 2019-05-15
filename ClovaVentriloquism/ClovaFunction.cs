@@ -47,16 +47,53 @@ namespace ClovaVentriloquism
             {
                 case RequestType.LaunchRequest:
                     {
-                        await client.StartNewAsync(nameof(WaitForLineInput), userId, null);
-                        cekResponse.AddText("LINEに入力をした内容をしゃべります。");
-
-                        // 無音無限ループに入る
-                        KeepClovaWaiting(cekResponse);
+                        cekResponse.AddText("腹話術を開始します。開始すると音声でのコントロールができなくなり、" +
+                            "LINEアプリの腹話術メニューでしかスキルの終了ができなくなります。LINEアプリの準備はいいですか？");
                         break;
                     }
                 case RequestType.IntentRequest:
                     {
-                        // インテントリクエストは特に用意しない
+                        switch (cekRequest.Request.Intent.Name)
+                        {
+                            case "Clova.GuideIntent":
+                                cekResponse.AddText("LINEに入力をした内容をしゃべります。" +
+                                    "LINEでセリフを事前にテンプレートとして登録したり、" +
+                                    "英語や韓国語への翻訳モードに変更することもできます。" +
+                                    "準備はいいですか？");
+                                cekResponse.ShouldEndSession = false;
+                                break;
+
+                            case "Clova.YesIntent":
+                            case "ReadyIntent":
+                                await client.StartNewAsync(nameof(WaitForLineInput), userId, null);
+
+                                cekResponse.AddText("LINEに入力をした内容をしゃべります。好きな内容をLINEから送ってね。");
+
+                                // 無音無限ループに入る
+                                KeepClovaWaiting(cekResponse);
+                                break;
+
+                            case "Clova.NoIntent":
+                            case "Clova.CancelIntent":
+                            case "Clova.PauseIntent":
+                            case "PauseIntent":
+                                // 無限ループ中の一時停止指示に対し、スキル終了をする
+                                await client.TerminateAsync(userId, "intent");
+                                cekResponse.AddText("腹話術を終了します。");
+                                break;
+
+                            case "Clova.FallbackIntent":
+                            default:
+                                // オーケストレーター起動中なら無音無限ループ
+                                var status = await client.GetStatusAsync(userId);
+                                if (status.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
+                                    status.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
+                                    status.RuntimeStatus == OrchestrationRuntimeStatus.Running)
+                                {
+                                    KeepClovaWaiting(cekResponse);
+                                }
+                                break;
+                        }
                         break;
                     }
                 case RequestType.EventRequest:
@@ -180,12 +217,6 @@ namespace ClovaVentriloquism
                         Stream = new AudioStreamInfoObject
                         {
                             BeginAtInMilliseconds = 0,
-                            ProgressReport = new ProgressReport
-                            {
-                                ProgressReportDelayInMilliseconds = null,
-                                ProgressReportIntervalInMilliseconds = null,
-                                ProgressReportPositionInMilliseconds = null
-                            },
                             Url = Consts.SilentAudioFileUri,
                             UrlPlayable = true
                         }
