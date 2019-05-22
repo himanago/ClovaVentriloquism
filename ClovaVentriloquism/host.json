@@ -2,7 +2,7 @@
   "version": "2.0",
   "extensions": {
     "queues": {
-      "maxPollingInterval": "00:00:05"
+      "maxPollingInterval": "00:00:03"
     }
   }
 }

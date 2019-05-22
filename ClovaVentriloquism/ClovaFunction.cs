@@ -14,12 +14,14 @@ using DurableTask.Core;
 using Newtonsoft.Json;
 using System.Text;
 using ClovaVentriloquism.Schema;
+using Line.Messaging;
 
 namespace ClovaVentriloquism
 {
     public static class ClovaFunction
     {
         private static readonly HttpClient httpClient = new HttpClient();
+        private static readonly ILineMessagingClient messagingClient = new LineMessagingClient(Consts.LineMessagingApiAccessToken);
 
         /// <summary>
         /// CEKのエンドポイント。
@@ -47,8 +49,8 @@ namespace ClovaVentriloquism
             {
                 case RequestType.LaunchRequest:
                     {
-                        cekResponse.AddText("腹話術を開始します。開始すると音声でのコントロールができなくなり、" +
-                            "LINEアプリの腹話術メニューでしかスキルの終了ができなくなります。LINEアプリの準備はいいですか？");
+                        cekResponse.AddText("腹話術を開始します。準備はいいですか？");
+                        cekResponse.ShouldEndSession = false;
                         break;
                     }
                 case RequestType.IntentRequest:
@@ -56,7 +58,7 @@ namespace ClovaVentriloquism
                         switch (cekRequest.Request.Intent.Name)
                         {
                             case "Clova.GuideIntent":
-                                cekResponse.AddText("LINEに入力をした内容をしゃべります。" +
+                                cekResponse.AddText("LINEに入力をした内容をしゃべります。。。" +
                                     "LINEでセリフを事前にテンプレートとして登録したり、" +
                                     "英語や韓国語への翻訳モードに変更することもできます。" +
                                     "準備はいいですか？");
@@ -65,16 +67,25 @@ namespace ClovaVentriloquism
 
                             case "Clova.YesIntent":
                             case "ReadyIntent":
-                                await client.StartNewAsync(nameof(WaitForLineInput), userId, null);
+                                // 友だち追加チェック
+                                try
+                                {
+                                    await messagingClient.GetUserProfileAsync(userId);
+                                }
+                                catch
+                                {
+                                    cekResponse.AddText("連携するLINEアカウントが友だち追加されていません。" +
+                                        "Clovaアプリの本スキルのページから、連携するLINEアカウントを友だち追加してください。");
+                                    break;
+                                }
 
+                                await client.StartNewAsync(nameof(WaitForLineInput), userId, null);
                                 cekResponse.AddText("LINEに入力をした内容をしゃべります。好きな内容をLINEから送ってね。");
 
                                 // 無音無限ループに入る
                                 KeepClovaWaiting(cekResponse);
                                 break;
 
-                            case "Clova.NoIntent":
-                            case "Clova.CancelIntent":
                             case "Clova.PauseIntent":
                             case "PauseIntent":
                                 // 無限ループ中の一時停止指示に対し、スキル終了をする
@@ -82,17 +93,40 @@ namespace ClovaVentriloquism
                                 cekResponse.AddText("腹話術を終了します。");
                                 break;
 
+                            case "Clova.NoIntent":
+                            case "Clova.CancelIntent":
+                            case "NotReadyIntent":
+                                // オーケストレーターが起動していないなら終了
+                                {
+                                    var status = await client.GetStatusAsync(userId);
+                                    if (status?.RuntimeStatus != OrchestrationRuntimeStatus.ContinuedAsNew &&
+                                        status?.RuntimeStatus != OrchestrationRuntimeStatus.Pending &&
+                                        status?.RuntimeStatus != OrchestrationRuntimeStatus.Running)
+                                    {
+                                        cekResponse.AddText("腹話術を終了します。");
+                                    }
+                                    else
+                                    {
+                                        KeepClovaWaiting(cekResponse);
+                                    }
+                                    break;
+                                }
+
                             case "Clova.FallbackIntent":
+                            case "NoActionIntent":  // 「ね」が準備OKのインテントに振り分けられてしまったので別途インテントに定義しておく
                             default:
                                 // オーケストレーター起動中なら無音無限ループ
-                                var status = await client.GetStatusAsync(userId);
-                                if (status.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
-                                    status.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
-                                    status.RuntimeStatus == OrchestrationRuntimeStatus.Running)
+                                // これを行わないとClovaが通常の返しをしてしまう
                                 {
-                                    KeepClovaWaiting(cekResponse);
+                                    var status = await client.GetStatusAsync(userId);
+                                    if (status?.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
+                                        status?.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
+                                        status?.RuntimeStatus == OrchestrationRuntimeStatus.Running)
+                                    {
+                                        KeepClovaWaiting(cekResponse);
+                                    }
+                                    break;
                                 }
-                                break;
                         }
                         break;
                     }
@@ -176,6 +210,7 @@ namespace ClovaVentriloquism
                             else if (cekRequest.Request.Event.Name == "PlayPaused")
                             {
                                 await client.TerminateAsync(userId, "PlayPaused");
+                                cekResponse.AddText("腹話術を終了します。");
                             }
                         }
                         break;
@@ -228,7 +263,7 @@ namespace ClovaVentriloquism
                     }
                 }
             });
-            //cekResponse.ShouldEndSession = false;
+            cekResponse.ShouldEndSession = false;
         }
 
         /// <summary>

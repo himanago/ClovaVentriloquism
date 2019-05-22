@@ -52,14 +52,14 @@ namespace ClovaVentriloquism
         {
             if (messageEvent.Message is TextEventMessage message)
             {
+                var str = message.Text.Replace("\r\n", "\n").Replace("\n", "。");
+
                 // テンプレート入力中であればテンプレートにメッセージを追加
                 var tmplStatus = await client.GetStatusAsync("tmpl_" + messageEvent.Source.UserId);
                 if (tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.ContinuedAsNew ||
                     tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Pending ||
                     tmplStatus?.RuntimeStatus == OrchestrationRuntimeStatus.Running)
                 {
-                    var str = message.Text.Replace("\r\n", "\n").Replace("\n", "。");
-
                     // Durable Functionsの外部イベントとして送信メッセージを投げる
                     await client.RaiseEventAsync("tmpl_" + messageEvent.Source.UserId, Consts.DurableEventNameAddToTemplate, str);
 
@@ -85,7 +85,7 @@ namespace ClovaVentriloquism
                             ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Running)
                         {
                             // Durable Functionsの外部イベントとして送信メッセージを投げる
-                            await client.RaiseEventAsync(messageEvent.Source.UserId, Consts.DurableEventNameLineVentriloquismInput, message.Text);
+                            await client.RaiseEventAsync(messageEvent.Source.UserId, Consts.DurableEventNameLineVentriloquismInput, str);
                             break;
                         }
                         else if (ventStatus.RuntimeStatus == OrchestrationRuntimeStatus.Terminated ||
@@ -96,7 +96,7 @@ namespace ClovaVentriloquism
                             await lineMessagingClient.ReplyMessageAsync(messageEvent.ReplyToken,
                                 new List<ISendMessage>
                                 {
-                                    new TextMessage("Clovaで「腹話術」のスキルを起動してください。")
+                                    new TextMessage("Clovaで「テキスト腹話術」のスキルを起動してください。")
                                 });
                             break;
                         }
